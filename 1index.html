@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Cuti SDM (Firebase)</title>
+    <style>
+        body { font-family:sans-serif; background: #eef0fa; margin:0;}
+        .container { max-width:900px; margin:40px auto; background:white; border-radius:14px; box-shadow:0 2px 22px #0001; padding:30px;}
+        .login-container { max-width:400px; margin:70px auto; background:white; border-radius:10px; box-shadow:0 2px 14px #0002; padding:35px; }
+        h2 { color:#667eea }
+        label { display:block; margin-top:8px; }
+        input, select, textarea { width:100%; padding:10px; margin-bottom:14px; border:1.2px solid #ccd; border-radius:6px; }
+        button { background:linear-gradient(135deg,#667eea,#764ba2); color:white; border:none; padding:11px 28px; border-radius:8px; font-size:16px; font-weight:600; cursor:pointer; margin-top:10px; }
+        .tabs { display:flex; gap:6px; margin-bottom:18px;}
+        .tab-btn { background:#eee; border:none; padding:11px 24px; border-radius:8px; cursor:pointer; font-weight:600;}
+        .tab-btn.active { background:linear-gradient(135deg,#667eea,#764ba2);color:white; }
+        .tab-content { display:none; }
+        .tab-content.active,.adminonly,.employeeonly {display:block;}
+        .dashboard-grid { display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:15px;margin-bottom:22px;}
+        .stat-card { background:#f7f7fa;padding:14px;border-radius:14px;box-shadow:0 2px 8px #667eea11;}
+        table { width:100%; border-collapse:collapse; margin-top:10px;}
+        th,td { border-bottom:1px solid #eee; padding:10px;}
+        th { background:#f7f7fc;color:#555 }
+        .status-badge { border-radius:10px; padding:4px 10px;font-size:13px;}
+        .status-pending { background:#fff3cd;color:#664d03;}
+        .status-approved { background:#d4edda;color:#155724 }
+        .status-rejected { background:#f8d7da;color:#721c24 }
+        .action-btn { border:none; border-radius:6px; padding:6px 13px; font-size:13px; font-weight:600; cursor:pointer;}
+        .btn-approve { background:#28a745;color:white; }
+        .btn-reject { background:#dc3545;color:white; }
+        .logout-btn {float:right; margin-top:0; background:#ea587c;}
+        @media(max-width:700px){.dashboard-grid{grid-template-columns:1fr;}}
+    </style>
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-firestore-compat.js"></script>
+</head>
+<body>
+<div id="main-content"></div>
+
+<script>
+// DEMO Firebase Project config (silakan ganti ke project Anda sendiri)
+const firebaseConfig = {
+  apiKey: "AIzaSyCYeIgJw__u4PU0S0FhrwhpmVv_o_0MCeA",
+  authDomain: "demo-sdm-cuti.firebaseapp.com",
+  projectId: "demo-sdm-cuti",
+  storageBucket: "demo-sdm-cuti.appspot.com",
+  messagingSenderId: "977876288676",
+  appId: "1:977876288676:web:f3af373b3b5e72f7d0f73d"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+// Dummy user database (login manual, tanpa database Auth/registrasi)
+const users = [
+    {username: "admin", password: "admin123", role: "admin"},
+    {username: "karyawan1", password: "abc123", role: "karyawan"},
+    {username: "karyawan2", password: "xyz456", role: "karyawan"}
+];
+
+let loggedInUser = null, userLeaves = [], allLeaves=[];
+
+// ------ LOGIN
+function showLogin() {
+    document.getElementById("main-content").innerHTML = `
+    <div class="login-container">
+      <h2>Login Sistem Cuti SDM (Realtime)</h2>
+      <form id="loginForm">
+        <label>Username</label><input type="text" id="username" required autocomplete="username">
+        <label>Password</label><input type="password" id="password" required autocomplete="current-password">
+        <button type="submit">MASUK</button>
+      </form>
+      <div id="errorMsg" style="color:#e74c3c;margin-top:12px;"></div>
+    </div>`;
+    document.getElementById("loginForm").onsubmit = async function(e){
+        e.preventDefault();
+        let user = users.find(u=>u.username===username.value && u.password===password.value);
+        if(user){
+            loggedInUser = user;
+            showApp();
+        } else {
+            document.getElementById("errorMsg").textContent = "Username atau password salah!";
+        }
+    }
+}
+
+// ------ LOGOUT
+function logout(){
+    loggedInUser = null;
+    showLogin();
+}
+
+// ------ MAIN APP / MENU
+function showApp(){
+    let isAdmin = loggedInUser.role=="admin";
+    let nav = `
+      <button class="logout-btn" onclick="logout()">Logout</button>
+      <div style="font-weight:700;color:#667eea;font-size:21px">
+        Hi, ${isAdmin? "Admin" : "Karyawan"} <span style="color:#b07fff;">${loggedInUser.username}</span></div>
+      <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('dashboard',this)">Dashboard</button>
+        <button class="tab-btn" onclick="switchTab('riwayat',this)">Riwayat</button>
+        ${isAdmin ? `<button class="tab-btn" onclick="switchTab('approval',this)">Persetujuan</button>` :
+        `<button class="tab-btn" onclick="switchTab('ajukan',this)">Ajukan Cuti</button>`}
+      </div>
+      <div class="tab-content active" id="dashboard"></div>
+      <div class="tab-content" id="riwayat"></div>
+      ${isAdmin ? `<div class="tab-content" id="approval"></div>`: `<div class="tab-content" id="ajukan"></div>`}
+    `;
+    document.getElementById("main-content").innerHTML = `<div class="container">${nav}</div>`;
+    setupDataRealtime();
+}
+function switchTab(tab, btn){
+    document.querySelectorAll(".tab-btn").forEach(b=>b.classList.remove("active"));
+    btn.classList.add("active");
+    document.querySelectorAll(".tab-content").forEach(t=>t.classList.remove("active"));
+    document.getElementById(tab).classList.add("active");
+}
+// ------ REALTIME DATA SYNC
+function setupDataRealtime(){
+    const isAdmin = loggedInUser.role=="admin";
+    db.collection("leaves")
+      .onSnapshot(qs=>{
+        let all = []; let mine=[];
+        qs.forEach(doc=>{
+            let d = {id: doc.id, ...doc.data()};
+            all.push(d);
+            if(d.username===loggedInUser.username) mine.push(d);
+        });
+        allLeaves = all;
+        userLeaves = mine;
+        showDashboard();
+        showRiwayat();
+        if(isAdmin) showApproval(); else showAjukan();
+      });
+}
+
+// ------ DASHBOARD
+function showDashboard() {
+    let isAdmin = loggedInUser.role=="admin";
+    let leavesData = isAdmin? allLeaves : userLeaves;
+    let sisaCuti = 12 - leavesData.filter(l=>l.status=="Approved" && l.type=="Cuti Tahunan").reduce((a,b)=>a+Number(b.duration),0);
+    let digunakan = 12-sisaCuti;
+    let pending = leavesData.filter(l=>l.status=="Pending").length;
+    let cutiHariIni = leavesData.filter(l=>inDateRange(new Date(),new Date(l.startDate), new Date(l.endDate)) && l.status=="Approved").length;
+    let recent = leavesData.slice(-5).reverse();
+    document.getElementById("dashboard").innerHTML = `
+      <div class="dashboard-grid">
+        <div class="stat-card"><h4>Sisa Cuti Tahunan</h4><div class="stat-value">${sisaCuti}</div></div>
+        <div class="stat-card"><h4>Cuti Digunakan</h4><div class="stat-value">${digunakan}</div></div>
+        <div class="stat-card"><h4>Cuti Pending</h4><div class="stat-value">${pending}</div></div>
+        <div class="stat-card"><h4>Cuti Hari Ini</h4><div class="stat-value">${cutiHariIni}</div></div>
+      </div>
+      <h4>Pengajuan Cuti Terbaru</h4>
+      <table>
+      <tr><th>Tanggal Pengajuan</th><th>Jenis</th><th>Mulai</th><th>Selesai</th><th>Durasi</th><th>Status</th></tr>
+      ${recent.length? recent.map(leaveRow).join("") :
+         `<tr><td colspan=6 style="text-align:center;color:#aaa">Belum ada pengajuan cuti</td></tr>`}
+      </table>
+    `;
+}
+
+function leaveRow(leave){
+    return `<tr>
+        <td>${leave.submissionDate || "-"} </td>
+        <td>${leave.type}</td>
+        <td>${leave.startDate || ""}</td>
+        <td>${leave.endDate || ""}</td>
+        <td>${leave.duration} hari</td>
+        <td><span class="status-badge status-${leave.status.toLowerCase()}">${leave.status}</span></td>
+    </tr>`;
+}
+function inDateRange(now, s, e){ return now>=s && now<=e; }
+
+// ------ AJUKAN CUTI (KARYAWAN)
+function showAjukan() {
+    document.getElementById("ajukan").innerHTML = `
+      <h4>Form Pengajuan Cuti</h4>
+      <form id="leaveForm">
+        <label>Jenis Cuti *</label>
+        <select id="leaveType" required>
+            <option value="">Pilih jenis cuti</option>
+            <option value="Cuti Tahunan">Cuti Tahunan</option>
+            <option value="Cuti Sakit">Cuti Sakit</option>
+            <option value="Cuti Melahirkan">Cuti Melahirkan</option>
+            <option value="Cuti Menikah">Cuti Menikah</option>
+            <option value="Cuti Ibadah">Cuti Ibadah</option>
+        </select>
+        <label>Tanggal Mulai *</label>
+        <input type="date" id="startDate" required>
+        <label>Tanggal Selesai *</label>
+        <input type="date" id="endDate" required>
+        <label>Durasi (hari kerja)</label>
+        <input type="number" id="duration" readonly style="background:#f7f7fa">
+        <label>Alasan Cuti *</label>
+        <textarea id="reason" required placeholder="Alasan cuti"></textarea>
+        <label>Nama Pengganti Sementara</label>
+        <input type="text" id="replacement">
+        <label>Kontak Darurat Saat Cuti</label>
+        <input type="tel" id="contact">
+        <button type="submit">Ajukan Cuti</button>
+      </form>
+      <div id="notifArea"></div>
+    `;
+    document.getElementById('startDate').onchange = calculateDuration;
+    document.getElementById('endDate').onchange = calculateDuration;
+
+    document.getElementById("leaveForm").onsubmit = async function(e){
+        e.preventDefault();
+        const s = document.getElementById('startDate').value;
+        const eD = document.getElementById('endDate').value;
+        let duration = Number(document.getElementById('duration').value);
+
+        let used = userLeaves.filter(l=>l.status=="Approved" && l.type=="Cuti Tahunan").reduce((a,b)=>a+Number(b.duration),0);
+        if (document.getElementById('leaveType').value=="Cuti Tahunan" && used+duration>12)
+          return showNotif("Cuti tahunan Anda telah habis!","error");
+
+        let formData = {
+          username: loggedInUser.username,
+          submissionDate: todayStr(),
+          type: document.getElementById('leaveType').value,
+          startDate: s,
+          endDate: eD,
+          duration: duration,
+          reason: document.getElementById('reason').value,
+          replacement: document.getElementById('replacement').value,
+          contact: document.getElementById('contact').value,
+          status: "Pending",
+          approvedBy: "-"
+        };
+        await db.collection("leaves").add(formData);
+        showNotif("Pengajuan cuti berhasil dikirim!","success");
+        document.getElementById("leaveForm").reset();
+        document.getElementById("duration").value="";
+    }
+}
+
+// ------ RIWAYAT CUTI
+function showRiwayat() {
+    document.getElementById("riwayat").innerHTML = `
+      <h4>Riwayat Pengajuan Cuti Saya</h4>
+      <table>
+      <tr><th>No</th><th>Tgl</th><th>Jenis</th><th>Periode</th><th>Durasi</th><th>Alasan</th><th>Status</th><th>Disetujui oleh</th></tr>
+      ${userLeaves.length? userLeaves.map((l,i)=>`
+      <tr>
+        <td>${i+1}</td><td>${l.submissionDate || ""}</td><td>${l.type}</td>
+        <td>${l.startDate} - ${l.endDate}</td><td>${l.duration} hari</td>
+        <td>${l.reason}</td>
+        <td><span class="status-badge status-${l.status.toLowerCase()}">${l.status}</span></td>
+        <td>${l.approvedBy}</td>
+      </tr>`).join("") : 
+      `<tr><td colspan=8 style="text-align:center;color:#777">Belum ada riwayat cuti</td></tr>`
+      }
+      </table>
+    `;
+}
+
+// ------ ADMIN: MENU APPROVAL
+function showApproval() {
+    let pendingLeaves = allLeaves.filter(l=>l.status=="Pending");
+    document.getElementById("approval").innerHTML = `
+      <h4>Persetujuan Cuti Karyawan</h4>
+      <table>
+      <tr><th>No</th><th>Nama</th><th>Jenis</th><th>Periode</th><th>Durasi</th><th>Alasan</th><th>Status</th><th>Aksi</th></tr>
+      ${pendingLeaves.length?
+        pendingLeaves.map((l,i)=>`
+        <tr>
+          <td>${i+1}</td><td>${l.username}</td><td>${l.type}</td>
+          <td>${l.startDate} - ${l.endDate}</td>
+          <td>${l.duration} hari</td>
+          <td>${l.reason}</td>
+          <td><span class="status-badge status-pending">Pending</span></td>
+          <td>
+            <button class="action-btn btn-approve" onclick="approveLeave('${l.id}')">Setujui</button>
+            <button class="action-btn btn-reject" onclick="rejectLeave('${l.id}')">Tolak</button>
+          </td>
+        </tr>`).join("")
+        : `<tr><td colspan=8 style="text-align:center;color:#aaa">Tidak ada cuti menunggu persetujuan</td></tr>`
+      }
+      </table>
+    `;
+}
+window.approveLeave = async function(id){
+    await db.collection("leaves").doc(id).update({status:'Approved', approvedBy: loggedInUser.username});
+};
+window.rejectLeave = async function(id){
+    await db.collection("leaves").doc(id).update({status:'Rejected', approvedBy: loggedInUser.username});
+};
+
+// ------ Utility
+function calculateDuration() {
+    let s = new Date(document.getElementById('startDate').value);
+    let e = new Date(document.getElementById('endDate').value);
+    let dur=0; if(s && e && s<=e) {
+        let t = new Date(s);
+        while (t<=e) { if(t.getDay()!=0&&t.getDay()!=6) dur++; t.setDate(t.getDate()+1);}
+    }
+    document.getElementById('duration').value = dur;
+}
+function showNotif(msg, type){
+    document.getElementById("notifArea").innerHTML = `<div style="background:${type=='error'?'#ffdada':'#eaffd8'};color:${type=='error'?'#cc4141':'#28962f'};padding:10px 18px;border-radius:7px;margin-top:10px">${msg}</div>`;
+    setTimeout(()=>{document.getElementById("notifArea").innerHTML=""}, 2400);
+}
+function todayStr(){ let d=new Date();return d.toISOString().substr(0,10);}
+
+// ------ INIT
+showLogin();
+</script>
+</body>
+</html>
